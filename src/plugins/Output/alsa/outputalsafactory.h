@@ -20,7 +20,6 @@
 #ifndef OUTPUTALSAFACTORY_H
 #define OUTPUTALSAFACTORY_H
 
-
 #include <QObject>
 #include <QString>
 #include <QIODevice>
