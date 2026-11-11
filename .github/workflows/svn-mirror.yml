@@ -26,6 +26,7 @@ concurrency:
 
 env:
   SVN_URL: svn://svn.code.sf.net/p/qmmp-dev/code/
+  README_BRANCH: sync/svn-to-git   # default branch that holds this action and README.md
 
 jobs:
   mirror:
@@ -504,9 +505,9 @@ jobs:
           fi
 
       #
-      # Step 6: Update README.md on svn-sync-entrypoint with latest mirror state
+      # Step 6: Update README.md on sync/svn-to-git with latest mirror state
       #
-      - name: Update README.md on svn-sync-entrypoint
+      - name: Update README.md on ${{ env.README_BRANCH }}
         env:
           FORCE_README: ${{ inputs.readme_only == true && '1' || '0' }}
         run: |
@@ -520,7 +521,7 @@ jobs:
             exit 0
           fi
 
-          git checkout -f svn-sync-entrypoint
+          git checkout -f "$README_BRANCH"
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
 
           # Tweakables
@@ -543,14 +544,10 @@ jobs:
             printf '%s' "$link"
           }
 
-          # Branches (excluding svn-sync-entrypoint) feed both the summary table and the recent-commits list
-          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -v '^svn-sync-entrypoint$' | sort || true)
-
+          # Branches (excluding sync/svn-to-git) feed both the summary table and the recent-commits list
+          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | sort || true)
           #  Recent commits: last N mirrored commits across all branches, newest first 
-          # Take the N most recent git-svn commits per branch, merge, and keep the global top N
-          # by revision. Exact despite the per-branch cutoff: any commit in the global top N is
-          # necessarily within its own branch's top N. Dedup by SHA: one commit reachable from
-          # several branches would otherwise occupy several rows; prio makes master win ties.
+          # Take the N most recent git-svn commits per branch, merge, and keep the global top N by revision. Exact despite the per-branch cutoff: any commit in the global top N is necessarily within its own branch's top N. Dedup by SHA: one commit reachable from several branches would otherwise occupy several rows; prio makes master win ties.
           # Records are TAB-separated:
           #   <rev> <prio> <sha> <date> <branch> <subject>
           RECENTS_RAW=""
@@ -674,8 +671,8 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -m "docs: update README with mirror state (r${LATEST_REV})"
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" svn-sync-entrypoint
-            echo "README.md updated on svn-sync-entrypoint"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" "$README_BRANCH"
+            echo "README.md updated on $README_BRANCH"
           else
             echo "README.md unchanged, skipping commit"
           fi
