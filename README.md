@@ -3,7 +3,7 @@ This repostory tracks upstream [qmmp](https://sourceforge.net/projects/qmmp-dev/
 
 > ⚠️ **You may be interested in:** a [fork of Qmmp with improvements to the media library](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library). It adds Artist/Album filtering to the Media Library, and has better support for [Winamp/Webamp skins](https://skins.webamp.org/) (and behaviors closer to classic Winamp, such as snapping to other panels, etc.).
 > 
-> <a href="https://github.com/cacfd3a/qmmp-git/tree/feature/media-library"><img width="743" height="889" alt="qmmp media player with media library" src="https://github.com/user-attachments/assets/dc9be5fe-37bf-4d52-9045-0ae7a2e7ed5c" /></a>
+> <a href="https://github.com/cacfd3a/qmmp-git/tree/feature/media-library"><img width="743" height="889" alt="qmmp media player with media library" src="https://github.com/user-attachments/assets/f85a13bf-d91e-4f1c-9d1c-d1a749403be6" /></a>
 
 ## SVN → Git mirror
 
@@ -11,8 +11,7 @@ This repostory tracks upstream [qmmp](https://sourceforge.net/projects/qmmp-dev/
 
 This repository is an archive which tracks the [Qmmp source code](https://sourceforge.net/p/qmmp-dev/) hosted on SourceForge, but with the entire history converted from SVN revisions into Git commits. All real development happens upstream in the [SVN repository](https://sourceforge.net/p/qmmp-dev/code/). The sync script in this repository attempts to follow all [branches](https://github.com/prinsbert/qmmp-dev/branches) as closely as possible, where `trunk` is renamed to [`master`](https://github.com/prinsbert/qmmp-dev/tree/master).
 
-<img width="743" height="889" alt="Qmmp with media library" src="https://github.com/user-attachments/assets/f85a13bf-d91e-4f1c-9d1c-d1a749403be6" />
-
+<img width="548" height="430" alt="Main window of qmmp media player" src="https://github.com/user-attachments/assets/a9fe56ba-fc13-43b3-bb42-1162606ff939" />
 
 ### Mirror Status
 
