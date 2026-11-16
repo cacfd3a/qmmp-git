@@ -17,24 +17,24 @@ This repository is an archive which tracks the [Qmmp source code](https://source
 
 | Field&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Value |
 |:---|:---|
-| Latest SVN revision | [`r13335`](https://github.com/prinsbert/qmmp-dev/commit/fb51d7140299bd996ff0b9adcb269670b43ac670) |
-| Last changed | 2026-11-04 20:51:22 UTC |
-| Branches | [54](https://github.com/prinsbert/qmmp-dev/branches) |
-| Tags (3) | [`qmmp-2.4.3`](https://github.com/prinsbert/qmmp-dev/releases/tag/qmmp-2.4.3) [`qmmp-2.4.2`](https://github.com/prinsbert/qmmp-dev/releases/tag/qmmp-2.4.2) [`qmmp-2.4.1`](https://github.com/prinsbert/qmmp-dev/releases/tag/qmmp-2.4.1) |
+| Latest SVN revision | [`r13335`](https://github.com/cacfd3a/qmmp-git/commit/8a65a6981eaa230db9189c0dd9416f88987d316e) |
+| Last changed | 2026-11-16 12:39:19 UTC |
+| Branches | [54](https://github.com/cacfd3a/qmmp-git/branches) |
+| Tags (3) | [`qmmp-2.4.3`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.3) [`qmmp-2.4.2`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.2) [`qmmp-2.4.1`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.1) |
 #### Recent commits (last 10)
 
-| Revision&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Date&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Message |
-|:---|:---|:---|
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13335`](https://github.com/prinsbert/qmmp-dev/commit/fb51d7140299bd996ff0b9adcb269670b43ac670) | 2026-11-04 17:31 | history: feature to select multiple records |
-| [`qmmp-0.12`](https://github.com/prinsbert/qmmp-dev/tree/qmmp-0.12)/[`r13334`](https://github.com/prinsbert/qmmp-dev/commit/4ca89a4cfbb7516b50ade0d2eaeb8a66a43aeac6) | 2026-11-04 13:44 | version bump |
-| [`qmmp-0.12`](https://github.com/prinsbert/qmmp-dev/tree/qmmp-0.12)/[`r13333`](https://github.com/prinsbert/qmmp-dev/commit/2e41057ca3f4f134d2d194e1f60b383a210f0b5a) | 2026-11-04 13:25 | gme: fixed fade out setting (#1245) |
-| [`qmmp-1.7`](https://github.com/prinsbert/qmmp-dev/tree/qmmp-1.7)/[`r13332`](https://github.com/prinsbert/qmmp-dev/commit/0b63aee3dbdb1b12830382474ce1b35963daaca8) | 2026-11-04 13:21 | gme: fixed fade out setting (#1245) |
-| [`qmmp-2.4`](https://github.com/prinsbert/qmmp-dev/tree/qmmp-2.4)/[`r13331`](https://github.com/prinsbert/qmmp-dev/commit/d16623b87582b03fa84de64541d6f12a229d5b5e) | 2026-11-04 13:19 | gme: fixed fade out setting (#1245) |
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13330`](https://github.com/prinsbert/qmmp-dev/commit/90a122acd03aa6fd55c8b6f2c0cc45d1e8b0f768) | 2026-11-04 13:18 | gme: optimization |
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13329`](https://github.com/prinsbert/qmmp-dev/commit/c5b5ed020ad93ee1ff430aceb984cd70b79ce1b7) | 2026-11-04 13:11 | optimization |
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13328`](https://github.com/prinsbert/qmmp-dev/commit/ceaed37f5f8bbd1b84e5c2413536cd7144e75ab5) | 2026-11-04 13:09 | gme: fixed fade out setting (#1245) |
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13327`](https://github.com/prinsbert/qmmp-dev/commit/971a4226f2e95f2bbce0fd4bab1514cc2ac9f04c) | 2026-11-04 10:35 | fixed cppcheck warnings |
-| **[`master`](https://github.com/prinsbert/qmmp-dev/tree/master)**/[`r13326`](https://github.com/prinsbert/qmmp-dev/commit/ba230ed3b4986cd4aec45fa0c5a845a528f97faa) | 2026-11-04 10:17 | fixed some cppcheck warnings |
+| | Revision&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Date&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Message |
+|---:|:---|:---|:---|
+| → | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13335`](https://github.com/cacfd3a/qmmp-git/commit/8a65a6981eaa230db9189c0dd9416f88987d316e) | 2026-11-04 17:31 | history: feature to select multiple records |
+| | [`feature/media-library`](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library)/[`r13335`](https://github.com/cacfd3a/qmmp-git/commit/c75d681ef4787be35e44b831ba1920dd408987b1) | 2026-11-04 17:31 | history: feature to select multiple records |
+| | [`qmmp-0.12`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-0.12)/[`r13334`](https://github.com/cacfd3a/qmmp-git/commit/204a8bf2ebdb26a0619eca633dfc44ff5f6ed29c) | 2026-11-04 13:44 | version bump |
+| | [`qmmp-0.12`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-0.12)/[`r13333`](https://github.com/cacfd3a/qmmp-git/commit/a08e46b46a88add91c2a8838de396571f4d6257e) | 2026-11-04 13:25 | gme: fixed fade out setting (#1245) |
+| | [`qmmp-1.7`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-1.7)/[`r13332`](https://github.com/cacfd3a/qmmp-git/commit/d17bd85030230d20174a3de2e67ead0a8f2740cb) | 2026-11-04 13:21 | gme: fixed fade out setting (#1245) |
+| | [`qmmp-2.4`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-2.4)/[`r13331`](https://github.com/cacfd3a/qmmp-git/commit/b465c2a6b1d0dd6096a2758963e9353a3e7d983a) | 2026-11-04 13:19 | gme: fixed fade out setting (#1245) |
+| | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13330`](https://github.com/cacfd3a/qmmp-git/commit/3a71fcf036b4a902bb972203b4d0003733057755) | 2026-11-04 13:18 | gme: optimization |
+| | [`feature/media-library`](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library)/[`r13330`](https://github.com/cacfd3a/qmmp-git/commit/9b435b224e4e054c59690996ee1dd77e214d3f4b) | 2026-11-04 13:18 | gme: optimization |
+| | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13329`](https://github.com/cacfd3a/qmmp-git/commit/97b49b0077e1b5e2b351e1a0ef2b0f97fbeca288) | 2026-11-04 13:11 | optimization |
+| | [`feature/media-library`](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library)/[`r13329`](https://github.com/cacfd3a/qmmp-git/commit/2a2c970c995c99483d5bf519a50d4dcb52a0d017) | 2026-11-04 13:11 | optimization |
 ## Description
 Qmmp is an audio-player, written with the help of the Qt library. The user interface is similar to [Winamp](https://nl.wikipedia.org/wiki/Winamp) or [XMMS](https://nl.wikipedia.org/wiki/XMMS). Alternative user interfaces are available, for example by downloading `.wsz` files from the [Webamp Skin Museum](https://skins.webamp.org/).
 
