@@ -1,0 +1,678 @@
+name: SVN → Git mirror
+
+# This workflow mirrors an SVN repository (qmmp-dev on SourceForge) to a Git repository on GitHub.  It runs on a schedule, supports manual triggering, and incrementally syncs new SVN revisions by parsing the SVN log and replaying each revision as a Git commit on the appropriate branch.
+
+on:
+  schedule:
+    - cron: '21 */14 * * *'
+  workflow_dispatch:            # Manual "Run workflow" button in the Actions UI
+    inputs:
+      readme_only:
+        description: 'Skip SVN sync; only regenerate the README.md status block'
+        type: boolean
+        default: false
+  push:
+    # The branch name is deliberately non-existent so this trigger only fires when the workflow file itself is pushed (for testing config changes).
+    branches: [ never-because-the-repository-was-seeded-already ]
+    paths:
+      - '.github/workflows/svn-mirror.yml'
+
+permissions:
+  contents: write               # Allow the GITHUB_TOKEN to push commits/tags
+
+concurrency:
+  group: svn-mirror             # Ensure only one mirror run at a time
+  cancel-in-progress: false     # Don't cancel a running sync. Let it finish
+
+env:
+  SVN_URL: svn://svn.code.sf.net/p/qmmp-dev/code/
+  README_BRANCH: sync/svn-to-git   # default branch that holds this action and README.md
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # TODO should we use this?
+      #      - name: Checkout repository
+      #        uses: actions/checkout@v4
+      #        with:
+      #          fetch-depth: 0 # Fetch all history for all branches and tags
+
+      #
+      # Step 1: Install the SVN client (not pre-installed on ubuntu-latest)
+      #
+      - name: Install subversion
+        if: ${{ inputs.readme_only != true }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends subversion gawk
+
+      #
+      # Step 2: Configure Git identity for the commits we'll create
+      #
+      - name: Configure Git identity
+        run: |
+          set -euo pipefail
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      #
+      # Step 3: Clone the existing Git mirror so we have history to append to
+      #
+      - name: Clone existing mirror from GitHub
+        run: |
+          set -euo pipefail
+          # Use the built-in GITHUB_TOKEN for authentication
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" mirror
+          cd mirror
+          # Detach HEAD so Git doesn't complain when we force-fetch and update
+          # all branches (you can't update the branch you're currently on).
+          git checkout --detach
+          # Fetch all branches and tags from origin (the '+' means force-update)
+          git fetch origin '+refs/heads/*:refs/heads/*'
+          git fetch origin '+refs/tags/*:refs/tags/*'
+
+      #
+      # Step 4: Core sync logic: fetch new SVN revisions and replay them
+      #
+      - name: Sync new SVN revisions
+        if: ${{ inputs.readme_only != true }}
+        run: |
+          set -euo pipefail
+          cd mirror
+
+          # State files in /tmp (persists across steps in this job):
+          #   mirror_changed: touched when this run mutated any ref; steps 5 & 6 bail out early when it's absent.
+          #   created_refs / deleted_refs: feeds the run summary and the push step.
+          CHANGED_FLAG=/tmp/mirror_changed
+          CREATED_REFS=/tmp/created_refs.txt
+          DELETED_REFS=/tmp/deleted_refs.txt
+          rm -f "$CHANGED_FLAG" "$CREATED_REFS" "$DELETED_REFS"
+
+          # Run counters (used by the summary at the end of this step).
+          REV_TOTAL=0 COMMITS=0 WARNINGS=0 FIRST_REV="" LAST_SEEN_REV=""
+
+          warn() { echo "  WARNING: $*"; WARNINGS=$((WARNINGS+1)); }
+
+          # Exit path for "nothing new on the SVN side": renders an up-to-date summary so the run isn't silent on the job Summary page.
+          uptodate_exit() {
+            {
+              echo "## 🪞 SVN → Git mirror ($(date -u '+%Y-%m-%d %H:%M:%S UTC'))"
+              echo
+              echo "✅ Mirror already up to date at r$LAST_REV. No new SVN revisions."
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            echo "No new revisions to sync. Mirror up to date at r$LAST_REV."
+            exit 0
+          }
+
+          #  4a: Determine the last SVN revision already mirrored 
+          # Every commit we create ends with a trailer like:
+          #   git-svn-id: svn://svn.code.sf.net/p/qmmp-dev/code/@1234
+          # Appends are tip-only and in ascending revision order, so each branch tip carries that branch's highest revision. Checking tips only is O(branches); the old full-history walk (with ~3 process spawns per commit) cost ~10 min on every run. Assumes mirror branches are only ever written by this workflow.
+          LAST_REV=0
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/heads); do
+            tip_rev=$(git log -1 --format=%B "$ref" 2>/dev/null | grep -oP 'git-svn-id:.*@\K[0-9]+' | tail -1 || true)
+            if [ -n "$tip_rev" ] && [ "$tip_rev" -gt "$LAST_REV" ]; then
+              LAST_REV=$tip_rev
+            fi
+          done
+          echo "Current mirrored SVN revision: r$LAST_REV"
+
+          # Resolve the commit a copyfrom "<path>:<rev>" points at: the last commit on src_ref at or before cf_rev (git-svn snapshot semantics).
+          # Walking a branch tip-first yields strictly descending SVN revisions (linear mirror, appends only), so the FIRST commit with rev <= cf_rev is exactly that snapshot. Early exit keeps the common case (recent copyfrom) to a handful of commits, and in-process bash parsing (no grep/sed forks per commit) keeps even a worst-case full walk to seconds. Echoes the SHA, or nothing if no commit is <= cf_rev (caller falls back to src_ref tip).
+          snapshot_sha() {
+            local src_ref=$1 cf_rev=$2 sha body rev probe
+            while IFS= read -r -d '' sha && IFS= read -r -d '' body; do
+              sha="${sha#$'\n'}"
+              rev=""
+              probe="$body"
+              # last git-svn-id match = the trailer (same as `grep | tail -1`)
+              while [[ "$probe" =~ git-svn-id:[^@]*@([0-9]+) ]]; do
+                rev="${BASH_REMATCH[1]}"
+                probe="${probe#*"${BASH_REMATCH[0]}"}"
+              done
+              if [ -n "$rev" ] && [ "$rev" -le "$cf_rev" ]; then
+                echo "$sha"
+                return 0
+              fi
+            done < <(git log "$src_ref" --format='%H%x00%B%x00' 2>/dev/null)
+            return 0
+          }
+
+          START_REV=$((LAST_REV + 1))
+
+          #  4b: Fetch the SVN log for all new revisions 
+          # `svn log -r START:HEAD` returns all revisions from START to the latest.  If START is beyond HEAD (no new revisions), svn log exits non-zero. We handle that gracefully, but only when that's actually why it failed; any other failure (auth, network, SF.net outage) is a real error and must not be mistaken for "nothing to sync".
+          if ! svn --non-interactive log -v -r "$START_REV:HEAD" "$SVN_URL" > /tmp/svn_log.txt 2>/tmp/svn_log_err.txt; then
+            if grep -qiE 'No such revision|E160006' /tmp/svn_log_err.txt; then
+              uptodate_exit
+            fi
+            echo "ERROR: svn log failed unexpectedly:"; cat /tmp/svn_log_err.txt
+            exit 1
+          fi
+
+          # Secondary check: if the file is empty or has only 1 line, there's
+          # nothing useful in it.
+          if [ ! -s /tmp/svn_log.txt ] || [ "$(wc -l < /tmp/svn_log.txt)" -le 1 ]; then
+            uptodate_exit
+          fi
+
+          #  4c: Parse and process each SVN revision 
+          # SVN log entries are separated by a line of exactly 72 dashes.
+          # We use awk with RS="-{72}" to split the file into records, feeding them (NUL-delimited) to a Bash while-loop via process substitution so counters set inside the loop survive it.
+          while IFS= read -r -d '' block; do
+
+            # Strip leading whitespace (awk records start with a newline)
+            block="${block#"${block%%[![:space:]]*}"}"
+            [ -z "$block" ] && continue
+
+            #  Parse the header line: "r123 | author | date | n lines" 
+            rev=$(printf '%s\n' "$block" | head -n1 | awk '{print $1}' | tr -d 'r')
+            author=$(printf '%s\n' "$block" | head -n1 | awk -F'|' '{print $2}' | sed 's/^ *//;s/ *$//')
+            git_date=$(printf '%s\n' "$block" | head -n1 | awk -F'|' '{print $3}' | awk '{print $1"T"$2" "$3}')
+
+            #  Parse the "Changed paths" section 
+            # Extract lines matching "   M /path" (3 spaces, action, space, path)
+            mapfile -t path_lines < <(printf '%s\n' "$block" | sed -n '/Changed paths:/,/^$/p' | grep -E '^   [A-Z]')
+
+            #  Parse the commit message 
+            # Preserve multi-paragraph messages (don't skip interior blank lines)
+            msg=$(printf '%s\n' "$block" | awk 'BEGIN{p=0} p{print} /^$/{p=1}')
+            [ -z "$msg" ] && msg="<empty SVN commit message>"
+            [ -z "$author" ] && author="unknown"
+            if [[ ! "$rev" =~ ^[0-9]+$ ]]; then
+              warn "unparsable revision header, skipping block"
+              continue
+            fi
+            REV_TOTAL=$((REV_TOTAL+1))
+            LAST_SEEN_REV=$rev
+            if [ -z "$FIRST_REV" ]; then FIRST_REV=$rev; fi
+            echo "Processing r$rev by $author... ($REV_TOTAL of run)"
+
+            #  Group changed paths by their target Git branch 
+            # Whole-branch/tag deletions are honored; the actual ref removal happens in the per-branch pass below.
+            # "=()" clears the arrays each revision. A bare re-declare inside the loop would KEEP entries from previous revisions, and stale re-fetches of since-deleted paths at the current revision abort with svn E160013.
+            declare -A branch_changes=() tag_changes=()
+            for pline in "${path_lines[@]}"; do
+              # BUG FIX: path_lines entries look like "   M /trunk/file.c".
+              # The action letter is at index 3 (after 3 spaces). The path
+              # starts at index 4 (space after action). Stripping just 1 char
+              # missed the action letter and glued it to the path, breaking
+              # branch routing. Now we slice exactly:
+              #   action = index 3
+              #   rest   = index 4 onward, with leading spaces trimmed
+              action=${pline:3:1}
+              rest=$(printf '%s\n' "${pline:4}" | sed 's/^ *//')
+
+              # Extract copyfrom info if present
+              copyfrom=$(printf '%s\n' "$rest" | sed -n 's/.* (from \(.*\))/\1/p')
+              cf_rev=""
+              if [ -n "$copyfrom" ]; then
+                rest=$(printf '%s\n' "$rest" | sed 's/ (from.*//')
+                # svn log copyfrom is "<path>:<rev>" (e.g. "/branches/myproduct-2.4:13274"). Split it here so nothing downstream glues ":13274" onto a branch/tag name.
+                if [[ "$copyfrom" =~ ^(.+):r?([0-9]+)$ ]]; then
+                  cf_rev="${BASH_REMATCH[2]}"
+                  copyfrom="${BASH_REMATCH[1]}"
+                fi
+              fi
+
+              git_branch=""
+              local_path=""
+
+              if [[ "$rest" == "/trunk"* ]]; then
+                git_branch="master"
+                local_path="${rest#/trunk/}"
+                [ "$local_path" == "$rest" ] && local_path=""
+              elif [[ "$rest" == "/branches/"* ]]; then
+                tmp=${rest#/branches/}
+                git_branch=${tmp%%/*}
+                if [[ "$tmp" == */* ]]; then
+                  local_path=${tmp#*/}
+                else
+                  local_path=""
+                fi
+              elif [[ "$rest" == "/tags/"* ]]; then
+                # Tags live in their own array so a tag key can never collide with a real branch name (e.g. /branches/tag_foo).
+                tmp=${rest#/tags/}
+                tag_name=${tmp%%/*}
+                if [[ "$tmp" == */* ]]; then
+                  local_path=${tmp#*/}
+                else
+                  local_path=""
+                fi
+                entry="$action"$'\x1f'"$local_path"$'\x1f'"$copyfrom"$'\x1f'"$cf_rev"
+                if [ -z "${tag_changes[$tag_name]-}" ]; then
+                  tag_changes[$tag_name]="$entry"
+                else
+                  tag_changes[$tag_name]+=$'\n'"$entry"
+                fi
+                continue
+              fi
+              if [ -z "$git_branch" ]; then
+                warn "unroutable path, skipping: $rest"
+                continue
+              fi
+              # Accumulate this change into the branch's change list
+              # \x1f can't appear in a path the way '|' theoretically could
+              entry="$action"$'\x1f'"$local_path"$'\x1f'"$copyfrom"$'\x1f'"$cf_rev"
+              if [ -z "${branch_changes[$git_branch]-}" ]; then
+                branch_changes[$git_branch]="$entry"
+              else
+                branch_changes[$git_branch]+=$'\n'"$entry"
+              fi
+            done
+
+            #  Apply changes to each affected branch (tags get their own pass below, always after branches).
+            while IFS= read -r git_branch; do
+              [ -n "$git_branch" ] || continue
+
+              #  Branch creation detection 
+              while IFS= read -r change; do
+                IFS=$'\x1f' read -r action local_path copyfrom cf_rev <<< "$change"
+
+                # Whole-branch deletion: "D /branches/X" (no file part, no copyfrom)
+                if [ "$action" == "D" ] && [ -z "$local_path" ] && [ -z "$copyfrom" ]; then
+                  if [ "$git_branch" == "master" ]; then
+                    warn "refusing to delete master, skipping"
+                  elif git rev-parse --verify --quiet "refs/heads/$git_branch" >/dev/null; then
+                    if [ "$(git branch --show-current)" == "$git_branch" ]; then
+                      git checkout --detach
+                    fi
+                    git branch -D "$git_branch"
+                    echo "refs/heads/$git_branch" >> "$DELETED_REFS"
+                    touch "$CHANGED_FLAG"
+                    echo "  Deleted branch $git_branch (removed from SVN)"
+                  fi
+                  continue
+                fi
+
+                if [ "$action" == "A" ] && [ -n "$copyfrom" ] && [ -z "$local_path" ]; then
+                  src_ref="master"
+                  if [[ "$copyfrom" == "/branches/"* ]]; then
+                    tmp=${copyfrom#/branches/}; src_ref=${tmp%%/*}
+                  fi
+
+                  # Create branches at the snapshot commit (last commit on src_ref at or before cf_rev), falling back to src_ref tip.
+                  src_commit=""
+                  if [ -n "$cf_rev" ]; then
+                    src_commit=$(snapshot_sha "$src_ref" "$cf_rev")
+                  fi
+                  if ! git rev-parse --verify --quiet "$git_branch" >/dev/null; then
+                    if [ -n "$src_commit" ]; then
+                      git branch "$git_branch" "$src_commit"
+                      echo "branches/$git_branch (from $copyfrom@r$cf_rev)" >> "$CREATED_REFS"
+                      touch "$CHANGED_FLAG"
+                      echo "  Created branch $git_branch at commit $src_commit (SVN r$cf_rev)"
+                    elif git rev-parse --verify --quiet "$src_ref" >/dev/null 2>&1; then
+                      git branch "$git_branch" "$src_ref"
+                      echo "branches/$git_branch (from $src_ref tip)" >> "$CREATED_REFS"
+                      touch "$CHANGED_FLAG"
+                      echo "  Created branch $git_branch from $src_ref tip (fallback)"
+                    else
+                      warn "cannot resolve copyfrom '$copyfrom' for branch $git_branch, skipping"
+                    fi
+                  fi
+                fi
+              done <<< "${branch_changes[$git_branch]}"
+
+              if ! git rev-parse --verify --quiet "$git_branch" >/dev/null; then
+                echo "  Branch $git_branch does not exist, skipping."
+                continue
+              fi
+
+              #  Apply file-level changes to the branch 
+              git checkout -f "$git_branch"
+
+              # Two passes: deletions first, then adds/modifications. A "replace" (R, or D+A of one path in one revision) must remove the old entry before new content is fetched; svn lists paths alphabetically, so the A/R line can precede the D line and in-order replay would export onto a file the D should have removed (the r13284 failure).
+              for pass in D X; do
+                while IFS= read -r change; do
+                  IFS=$'\x1f' read -r action local_path copyfrom cf_rev <<< "$change"
+                  [ -z "$local_path" ] && continue
+                  case "$local_path" in
+                    *..*|/*) warn "suspicious path, skipping: $local_path"; continue ;;
+                  esac
+                  if [ "$pass" == "D" ]; then
+                    [ "$action" == "D" ] || continue
+                    git rm -rf --ignore-unmatch "$local_path"
+                  else
+                    [ "$action" != "D" ] || continue
+                    if [[ "$git_branch" == "master" ]]; then
+                      svn_target="$SVN_URL/trunk/$local_path"
+                    else
+                      svn_target="$SVN_URL/branches/$git_branch/$local_path"
+                    fi
+
+                    mkdir -p "$(dirname "$local_path")"
+
+                    # `svn cat` doubles as the file-vs-directory probe: success means the path is a file. It writes to a temp name so a local directory at $local_path can't abort the probe via redirection and get misrouted into the export branch.
+                    if svn --non-interactive cat -r "$rev" "$svn_target@$rev" > "$local_path.mirror-tmp" 2>/dev/null; then
+                      # File: if our tree still has a directory at the path (SVN replaced a dir with a file), clear it first.
+                      if [ -d "$local_path" ]; then
+                        git rm -rf -q --ignore-unmatch "$local_path" >/dev/null 2>&1 || true
+                        rm -rf "$local_path"
+                      fi
+                      mv -f "$local_path.mirror-tmp" "$local_path"
+                      git add -A "$local_path"
+                    else
+                      rm -f "$local_path.mirror-tmp"
+                      # Directory: if our tree still has a plain file at the path (SVN replaced a file with a dir; the r13284 case), export fails locally with E155007; clear it.
+                      if [ -e "$local_path" ] && [ ! -d "$local_path" ]; then
+                        git rm -rf -q --ignore-unmatch "$local_path" >/dev/null 2>&1 || true
+                        rm -f "$local_path"
+                      fi
+                      # A failed export here is fatal: the log claims this path exists at r$rev, so a miss means log/repo disagreement or a transient error. Abort cleanly. Nothing has been pushed, the next run simply retries.
+                      svn --non-interactive export -r "$rev" --force "$svn_target@$rev" "$local_path" \
+                        || { echo "  ERROR: r$rev: fetch failed for $svn_target@$rev (branch $git_branch): aborting, nothing was pushed; safe to re-run"; exit 1; }
+                      git add -A "$local_path"
+                    fi
+                  fi
+                done <<< "${branch_changes[$git_branch]}"
+              done
+
+              #  Commit if there are staged changes 
+              if ! git diff --cached --quiet; then
+                git config user.name "$author"
+                git config user.email "$author@users.noreply.github.com"
+
+                commit_msg="$msg"$'\n\n'"git-svn-id: $SVN_URL@$rev"
+                GIT_AUTHOR_DATE="$git_date" GIT_COMMITTER_DATE="$git_date" git commit -m "$commit_msg"
+                COMMITS=$((COMMITS+1))
+                touch "$CHANGED_FLAG"
+                echo "  Committed r$rev to $git_branch"
+              else
+                echo "  No changes to commit for r$rev on $git_branch"
+              fi
+            done < <(
+              # Existing branches first: their commits for this revision land on the branch tip before branches created from them in the same revision are processed (snapshot_sha reads live refs, so it sees those tips). Creations follow.
+              for b in "${!branch_changes[@]}"; do
+                if git rev-parse --verify --quiet "refs/heads/$b" >/dev/null; then
+                  echo "$b"
+                fi
+              done
+              for b in "${!branch_changes[@]}"; do
+                if ! git rev-parse --verify --quiet "refs/heads/$b" >/dev/null; then
+                  echo "$b"
+                fi
+              done
+            )
+            #  Apply tag operations always after all branches, so a tag cut in the same revision that changed its source branch sees the branch's new commit.
+            for tag_name in "${!tag_changes[@]}"; do
+              while IFS= read -r change; do
+                IFS=$'\x1f' read -r action local_path copyfrom cf_rev <<< "$change"
+                if [ "$action" == "A" ] && [ -n "$copyfrom" ] && [ -z "$local_path" ]; then
+                  src_ref="master"
+                  src_tag=""
+                  if [[ "$copyfrom" == "/branches/"* ]]; then
+                    tmp=${copyfrom#/branches/}; src_ref=${tmp%%/*}
+                  elif [[ "$copyfrom" == "/tags/"* ]]; then
+                    tmp=${copyfrom#/tags/}; src_tag=${tmp%%/*}
+                    src_ref="refs/tags/$src_tag"
+                  fi
+
+                  src_commit=""
+                  if [ -n "$src_tag" ]; then
+                    src_commit=$(git rev-parse --verify --quiet "refs/tags/$src_tag" 2>/dev/null || true)
+                  elif [ -n "$cf_rev" ]; then
+                    src_commit=$(snapshot_sha "$src_ref" "$cf_rev")
+                  fi
+
+                  if ! git rev-parse --verify --quiet "refs/tags/$tag_name" >/dev/null; then
+                    if [ -n "$src_commit" ]; then
+                      git tag "$tag_name" "$src_commit"
+                      echo "tags/$tag_name (from $copyfrom@r$cf_rev)" >> "$CREATED_REFS"
+                      touch "$CHANGED_FLAG"
+                      echo "  Created tag $tag_name at commit $src_commit (SVN r$cf_rev)"
+                    elif git rev-parse --verify --quiet "$src_ref" >/dev/null 2>&1; then
+                      git tag "$tag_name" "$src_ref"
+                      echo "tags/$tag_name (from $src_ref tip)" >> "$CREATED_REFS"
+                      touch "$CHANGED_FLAG"
+                      echo "  Created tag $tag_name from $src_ref tip (fallback)"
+                    else
+                      warn "cannot resolve copyfrom '$copyfrom' for tag $tag_name, skipping"
+                    fi
+                  fi
+                elif [ "$action" == "D" ] && [ -z "$local_path" ]; then
+                  if git rev-parse --verify --quiet "refs/tags/$tag_name" >/dev/null; then
+                    git tag -d "$tag_name"
+                    echo "refs/tags/$tag_name" >> "$DELETED_REFS"
+                    touch "$CHANGED_FLAG"
+                    echo "  Deleted tag $tag_name (removed from SVN)"
+                  fi
+                else
+                  warn "unsupported tag operation ($action $local_path) on $tag_name, skipping"
+                fi
+              done <<< "${tag_changes[$tag_name]}"
+            done
+          done < <(gawk 'BEGIN{RS="-{72}"} NF>0 {print $0 "\x00"}' /tmp/svn_log.txt)
+
+          #  4d: Run summary: human-readable report on the job Summary page 
+          # Join each line of a ref list into backticked, comma-separated Markdown.
+          mdlist() { awk 'NR>1{printf ", "} {printf "`%s`", $0} END{print ""}' "$1"; }
+
+          echo "Sync complete: $REV_TOTAL revision(s) replayed, $COMMITS commit(s) created, $WARNINGS warning(s)."
+          {
+            echo "## 🪞 SVN → Git mirror ($(date -u '+%Y-%m-%d %H:%M:%S UTC'))"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Revisions replayed | **$REV_TOTAL** (r$FIRST_REV → r$LAST_SEEN_REV) |"
+            echo "| Git commits created | $COMMITS |"
+            if [ -s "$CREATED_REFS" ]; then
+              echo "| Refs created | $(mdlist "$CREATED_REFS") |"
+            else
+              echo "| Refs created | *None* |"
+            fi
+            if [ -s "$DELETED_REFS" ]; then
+              echo "| Refs deleted | $(mdlist "$DELETED_REFS") |"
+            else
+              echo "| Refs deleted | *None* |"
+            fi
+            echo "| Warnings | $WARNINGS |"
+            echo
+            if [ ! -e "$CHANGED_FLAG" ]; then
+              echo "ℹ️ Revisions were replayed but produced no Git changes (e.g. property-only SVN commits). Nothing to push, README untouched."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      #
+      # Step 5: Push the updated mirror back to GitHub
+      #
+      - name: Push mirror to GitHub
+        if: ${{ inputs.readme_only != true }}
+        run: |
+          set -euo pipefail
+          cd mirror
+
+          # Nothing mutated locally this run → local refs are identical to remote; skip the (harmless but pointless) round trips.
+          if [ ! -e /tmp/mirror_changed ]; then
+            echo "Nothing changed in the mirror this run. Nothing to push."
+            exit 0
+          fi
+
+          REMOTE="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+          # a normal push should always fast-forward, so we do not use the --force flag
+          git push "$REMOTE" 'refs/heads/*:refs/heads/*'
+          git push "$REMOTE" 'refs/tags/*:refs/tags/*'
+
+          # Local deletions don't propagate via glob refspecs; delete any refs removed from SVN this run (/tmp persists across steps).
+          if [ -s /tmp/deleted_refs.txt ]; then
+            while IFS= read -r ref; do
+              [ -n "$ref" ] || continue
+              git push "$REMOTE" --delete "$ref" || echo "  WARNING: could not delete remote $ref"
+            done < /tmp/deleted_refs.txt
+          fi
+
+      #
+      # Step 6: Update README.md on sync/svn-to-git with latest mirror state
+      #
+      - name: Update README.md on ${{ env.README_BRANCH }}
+        env:
+          FORCE_README: ${{ inputs.readme_only == true && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          cd mirror
+
+          # Bail out when the mirror didn't actually change: rewriting the block would only churn the timestamp, making "Last changed" a lie.
+          # Exception: a manual readme_only run (FORCE_README=1) exists precisely to rewrite the block.
+          if [ ! -e /tmp/mirror_changed ] && [ "${FORCE_README:-0}" != "1" ]; then
+            echo "No mirror changes this run. Skipping README update (use the 'readme_only' dispatch input to force a regen)."
+            exit 0
+          fi
+
+          git checkout -f "$README_BRANCH"
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+
+          # Tweakables
+          RECENT_COUNT=10          # rows in the recent-commits table
+          TAGS_MAX=20              # tags listed before collapsing into "[+N more]"
+          SUBJECT_MAX=100          # message cell width before truncation
+
+          # --- Markdown helpers -------------------------------------------------
+          # Escape characters that would break a GFM table cell: backslash first (so we
+          # don't double the escapes we're about to add), then pipe (cell separator) and
+          # backtick (code-span delimiter). Valid in plain text AND inside code spans.
+          esc_md() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/`/\\`/g'; }
+
+          # Linked branch name; master bold so the mainline stands out
+          branch_link() {
+            local b link
+            b=$(esc_md "$1")
+            link=$(printf '[`%s`](%s/tree/%s)' "$b" "$REPO_URL" "$b")
+            if [ "$1" = "master" ]; then link="**${link}**"; fi
+            printf '%s' "$link"
+          }
+
+          # Branches (excluding sync/svn-to-git) feed both the summary table and the recent-commits list
+          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | sort || true)
+          #  Recent commits: last N mirrored commits across all branches, newest first 
+          # Take the N most recent git-svn commits per branch, merge, and keep the global top N by revision. Exact despite the per-branch cutoff: any commit in the global top N is necessarily within its own branch's top N. Dedup by SHA: one commit reachable from several branches would otherwise occupy several rows; prio makes master win ties.
+          # Records are TAB-separated:
+          #   <rev> <prio> <sha> <date> <branch> <subject>
+          RECENTS_RAW=""
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            prio=1; [ "$ref" = "master" ] && prio=0
+            # Same NUL-record trick as snapshot_sha(): %B is multi-line, so fields can't be read line-wise.
+            while IFS= read -r -d '' sha && IFS= read -r -d '' rev_date && IFS= read -r -d '' subject && IFS= read -r -d '' body; do
+              sha="${sha#$'\n'}"                        # git log emits a newline between records
+              rev=$(printf '%s\n' "$body" | grep -oP 'git-svn-id:.*@\K[0-9]+' | tail -1 || true)
+              [ -z "$rev" ] && continue                 # belt & braces: --grep already filtered to mirrored commits
+              printf -v row '%s\t%s\t%s\t%s\t%s\t%s' "$rev" "$prio" "$sha" "$rev_date" "$ref" "$subject"
+              RECENTS_RAW+="${row}"$'\n'
+            done < <(git log "$ref" -n "$RECENT_COUNT" --extended-regexp --grep='git-svn-id:' \
+                       --date=format:'%Y-%m-%d %H:%M' \
+                       --format='%H%x00%ad%x00%s%x00%B%x00' 2>/dev/null)
+          done < <(printf '%s\n' "$BRANCH_LIST")
+
+          # Newest first (numeric desc on rev); master beats other branches on equal rev (dedup winner); SHA breaks any remaining tie deterministically. sed -n instead of head -n: head exits early and can break the writer's pipe (the printf warning you saw).
+          RECENTS_SORTED=$(printf '%s' "$RECENTS_RAW" | sort -t$'\t' -k1,1nr -k2,2n -k3,3 | awk -F'\t' '!seen[$3]++' || true)
+
+          LATEST_REV="unknown"
+          LATEST_SHA=""
+          if [ -n "$RECENTS_SORTED" ]; then
+            first_line="${RECENTS_SORTED%%$'\n'*}"
+            IFS=$'\t' read -r LATEST_REV _prio LATEST_SHA _rest <<< "$first_line"
+          fi
+          if [ -n "$LATEST_SHA" ]; then
+            REV_MD="[\`r${LATEST_REV}\`](${REPO_URL}/commit/${LATEST_SHA})"
+          else
+            REV_MD="r${LATEST_REV}"
+          fi
+
+          SYNC_TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          # Branches row of the summary table
+          BRANCH_COUNT=0
+          BRANCHES_MD="*None*"
+          if [ -n "$BRANCH_LIST" ]; then
+            BRANCH_COUNT=$(printf '%s\n' "$BRANCH_LIST" | wc -l | tr -d ' ')
+            BRANCHES_MD=""
+            while IFS= read -r b; do
+              [ -n "$b" ] || continue
+              BRANCHES_MD+="$(branch_link "$b") "
+            done <<< "$BRANCH_LIST"
+            BRANCHES_MD=${BRANCHES_MD%?}              # drop trailing space
+          fi
+          BRANCHES_URL="${REPO_URL}/branches"
+          
+          # Tags as inline links (head -> sed so a >20-tag repo can't trigger the broken-pipe warning)
+          TAG_LIST=$(git tag --sort=-v:refname 2>/dev/null || true)
+          if [ -n "$TAG_LIST" ]; then
+            TAG_COUNT=$(printf '%s\n' "$TAG_LIST" | wc -l | tr -d ' ')
+            TAGS_MD=$(printf '%s\n' "$TAG_LIST" | sed -n "1,${TAGS_MAX}p" | sed "s|.*|[\`&\`](${REPO_URL}/releases/tag/&)|" | paste -sd ' ')
+            if [ "$TAG_COUNT" -gt "$TAGS_MAX" ]; then
+              MORE_COUNT=$((TAG_COUNT - TAGS_MAX))
+              TAGS_MD="${TAGS_MD} [+${MORE_COUNT} more](${REPO_URL}/tags)"
+            fi
+          else
+            TAG_COUNT=0
+            TAGS_MD="*None*"
+          fi
+
+          # Render the recent-commits table: branch and rev share the first cell
+          RECENTS_MD=""
+          if [ -n "$RECENTS_SORTED" ]; then
+            # Add a lot of non-breaking spaces to force a minimum width on the column: Github is not so smart about auto-sizing and would stretch the last column whil all others be way too narrow.
+            RECENTS_MD="| Revision&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Date&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Message |"$'\n'"|:---|:---|:---|"
+            while IFS=$'\t' read -r rev _prio sha rev_date branch subject; do
+              [ -n "$rev" ] || continue
+              # Truncate BEFORE escaping so an escape sequence is never cut in half
+              if [ "${#subject}" -gt "$SUBJECT_MAX" ]; then subject="${subject:0:$((SUBJECT_MAX-3))}..."; fi
+              subject=$(esc_md "$subject")
+              RECENTS_MD+=$'\n'"| $(branch_link "$branch")/[\`r${rev}\`](${REPO_URL}/commit/${sha}) | ${rev_date} | ${subject} |"
+            done < <(printf '%s\n' "$RECENTS_SORTED" | sed -n "1,${RECENT_COUNT}p")
+          else
+            RECENTS_MD="*No mirrored commits yet.*"
+          fi
+          # Generate state block and strip leading indentation spaces
+          # NOTE: the timestamp is only refreshed when the mirror actually changed (guarded above), so it reads as "Last changed", not "last time the workflow happened to run".
+          # NOTE: no literal backticks below on purpose — an unquoted heredoc executes them; all Markdown backticks live in the pre-built variables.
+          # NOTE: We add a lot of non-breaking spaces to the header row in order to force a minimum width on the column: Github is not so smart about auto-sizing and would stretch the last column whil all others be way too narrow.
+          
+          NEW_STATE=$(cat <<EOF | sed 's/^[[:space:]]*//'
+          ### Mirror Status
+
+          | Field&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Value |
+          |:---|:---|
+          | Latest SVN revision | ${REV_MD} |
+          | Last changed | ${SYNC_TIMESTAMP} |
+          | Branches | [${BRANCH_COUNT}](${BRANCHES_URL}) |
+          | Tags (${TAG_COUNT}) | ${TAGS_MD} |
+          #### Recent commits (last ${RECENT_COUNT})
+
+          ${RECENTS_MD}
+          EOF
+          )
+
+          # Surgically update or append block
+          if grep -q '^### Mirror Status$' README.md; then
+            NEW_STATE="$NEW_STATE" awk '
+              BEGIN { skip = 0 }
+              /^### Mirror Status$/ {
+                print ENVIRON["NEW_STATE"]
+                skip = 1
+                next
+              }
+              # The block has ended at the next Markdown heading, EXCEPT our own level-4 subheading ("#### Recent commits ..."), which belongs to the block. Without this exclusion, the next run would splice the new block in at that subheading and duplicate the table below it.
+              skip && /^#/ && !/^#### Recent commits/ { skip = 0 }
+              !skip { print }
+            ' README.md > README.md.tmp && mv README.md.tmp README.md
+          else
+            # No existing state block; append after the existing intro
+            printf "\n%s\n" "$NEW_STATE" >> README.md
+          fi
+
+          # Commit and push if changed
+          git add README.md
+          if ! git diff --cached --quiet; then
+            # Re-assert identity for this specific branch commit
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "docs: update README with mirror state (r${LATEST_REV})"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" "$README_BRANCH"
+            echo "README.md updated on $README_BRANCH"
+          else
+            echo "README.md unchanged, skipping commit"
+          fi
