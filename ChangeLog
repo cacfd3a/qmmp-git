@@ -1,6 +1,9 @@
 Changelog of Qt-based Multimedia Player
 --------------
 
+Version 2.4.4
+* fixed fade out setting in the gme plugin
+
 Version 2.4.3
 * fixed cache path under Windows in the skinned user interface
 * fixed issue with multiple ID3v2 tags in the mpeg plugin
