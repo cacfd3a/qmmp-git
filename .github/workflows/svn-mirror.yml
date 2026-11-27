@@ -27,6 +27,7 @@ concurrency:
 env:
   SVN_URL: svn://svn.code.sf.net/p/qmmp-dev/code/
   README_BRANCH: sync/svn-to-git   # default branch that holds this action and README.md
+  NON_SVN_BRANCHES: 'sync|feature' # branch namespaces that exist only on GitHub; never mirrored, never pushed by the mirror
 
 jobs:
   mirror:
@@ -74,6 +75,9 @@ jobs:
           git fetch origin '+refs/heads/*:refs/heads/*'
           git fetch origin '+refs/tags/*:refs/tags/*'
 
+          # Snapshot of what exists on the remote right now. Only this workflow writes mirror refs and the concurrency group serializes runs, so "on the remote" == "in this snapshot". The push step uses it to decide which refs need a remote delete or a forced update, without any network round trip.
+          git for-each-ref --format='%(refname)' refs/heads refs/tags > /tmp/initial_refs.txt
+
       #
       # Step 4: Core sync logic: fetch new SVN revisions and replay them
       #
@@ -112,7 +116,7 @@ jobs:
           #   git-svn-id: svn://svn.code.sf.net/p/qmmp-dev/code/@1234
           # Appends are tip-only and in ascending revision order, so each branch tip carries that branch's highest revision. Checking tips only is O(branches); the old full-history walk (with ~3 process spawns per commit) cost ~10 min on every run. Assumes mirror branches are only ever written by this workflow.
           LAST_REV=0
-          for ref in $(git for-each-ref --format='%(refname:short)' refs/heads); do
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/heads | grep -Ev "^(${NON_SVN_BRANCHES})/" || true); do
             tip_rev=$(git log -1 --format=%B "$ref" 2>/dev/null | grep -oP 'git-svn-id:.*@\K[0-9]+' | tail -1 || true)
             if [ -n "$tip_rev" ] && [ "$tip_rev" -gt "$LAST_REV" ]; then
               LAST_REV=$tip_rev
@@ -477,7 +481,7 @@ jobs:
               echo "ℹ️ Revisions were replayed but produced no Git changes (e.g. property-only SVN commits). Nothing to push, README untouched."
             fi
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-          	
+
       #
       # Step 5: Push the updated mirror back to GitHub
       #
@@ -495,33 +499,42 @@ jobs:
 
           REMOTE="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
 
-          # Decide per deleted ref (de-duplicated):
-          #   - still exists locally  → deleted and re-created this run. Don't delete it on the remote; but its history
-          #     usually diverges from the old remote tip, so force that namespace (heads/tags).
-          #   - gone locally, exists on remote → delete it on the remote.
-          #   - gone locally, not on remote   → created and deleted within this run; never pushed, nothing to do
-          #     (a ':ref' delete would fail the whole atomic push).
-          heads_force="" tags_force=""
+          # Decide per deleted ref (de-duplicated), using the post-clone snapshot of the remote (/tmp/initial_refs.txt):
+          #   - not in the snapshot           → created and deleted within this run; never on the remote, nothing to do
+          #                                     (a ':ref' delete would fail the whole atomic push).
+          #   - in snapshot, exists locally   → deleted and re-created this run. Its history usually diverges from the old
+          #                                     remote tip, so force-update exactly this ref (and only this ref).
+          #   - in snapshot, gone locally     → delete it on the remote.
+          declare -A force_refs=()
           del=()
           if [ -s /tmp/deleted_refs.txt ]; then
             while IFS= read -r ref; do
               [ -n "$ref" ] || continue
+              grep -qxF -- "$ref" /tmp/initial_refs.txt || continue
               if git rev-parse --verify -q "$ref" >/dev/null; then
-                case "$ref" in
-                  refs/heads/*) heads_force="+" ;;
-                  refs/tags/*)  tags_force="+" ;;
-                esac
-              elif git ls-remote --exit-code "$REMOTE" "$ref" >/dev/null 2>&1; then
+                force_refs["$ref"]=1
+              else
                 del+=(":$ref")
               fi
             done < <(sort -u /tmp/deleted_refs.txt)
           fi
 
+          # Explicit refspecs, no globs: every mirrored branch and tag is pushed without force (a normal push should
+          # always fast-forward), except the re-created refs above. Branches in the non-SVN namespaces (sync/*, feature/*)
+          # are never pushed by the mirror.
+          push_specs=()
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            if [ -n "${force_refs[$ref]-}" ]; then
+              push_specs+=("+$ref:$ref")
+            else
+              push_specs+=("$ref:$ref")
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/heads refs/tags | grep -Ev "^refs/heads/(${NON_SVN_BRANCHES})/" || true)
+
           # One atomic push: either all ref updates and deletions land, or none do.
-          git push --atomic "$REMOTE" \
-            "${heads_force}refs/heads/*:refs/heads/*" \
-            "${tags_force}refs/tags/*:refs/tags/*" \
-            "${del[@]}"
+          git push --atomic "$REMOTE" "${push_specs[@]}" "${del[@]}"
+
       #
       # Step 6: Update README.md on sync/svn-to-git with latest mirror state
       #
@@ -563,7 +576,7 @@ jobs:
           }
 
           # Branches (excluding sync/svn-to-git) feed both the summary table and the recent-commits list
-          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | sort || true)
+          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | grep -Ev "^(${NON_SVN_BRANCHES})/" | sort || true)
           #  Recent commits: last N mirrored commits across all branches, newest first 
           # Take the N most recent git-svn commits per branch, merge, and keep the global top N by revision. Exact despite the per-branch cutoff: any commit in the global top N is necessarily within its own branch's top N. Dedup by SHA: one commit reachable from several branches would otherwise occupy several rows; prio makes master win ties.
           # Records are TAB-separated:
