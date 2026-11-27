@@ -477,7 +477,7 @@ jobs:
               echo "ℹ️ Revisions were replayed but produced no Git changes (e.g. property-only SVN commits). Nothing to push, README untouched."
             fi
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-
+          	
       #
       # Step 5: Push the updated mirror back to GitHub
       #
@@ -494,18 +494,34 @@ jobs:
           fi
 
           REMOTE="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
-          # a normal push should always fast-forward, so we do not use the --force flag
-          git push "$REMOTE" 'refs/heads/*:refs/heads/*'
-          git push "$REMOTE" 'refs/tags/*:refs/tags/*'
 
-          # Local deletions don't propagate via glob refspecs; delete any refs removed from SVN this run (/tmp persists across steps).
+          # Decide per deleted ref (de-duplicated):
+          #   - still exists locally  → deleted and re-created this run. Don't delete it on the remote; but its history
+          #     usually diverges from the old remote tip, so force that namespace (heads/tags).
+          #   - gone locally, exists on remote → delete it on the remote.
+          #   - gone locally, not on remote   → created and deleted within this run; never pushed, nothing to do
+          #     (a ':ref' delete would fail the whole atomic push).
+          heads_force="" tags_force=""
+          del=()
           if [ -s /tmp/deleted_refs.txt ]; then
             while IFS= read -r ref; do
               [ -n "$ref" ] || continue
-              git push "$REMOTE" --delete "$ref" || echo "  WARNING: could not delete remote $ref"
-            done < /tmp/deleted_refs.txt
+              if git rev-parse --verify -q "$ref" >/dev/null; then
+                case "$ref" in
+                  refs/heads/*) heads_force="+" ;;
+                  refs/tags/*)  tags_force="+" ;;
+                esac
+              elif git ls-remote --exit-code "$REMOTE" "$ref" >/dev/null 2>&1; then
+                del+=(":$ref")
+              fi
+            done < <(sort -u /tmp/deleted_refs.txt)
           fi
 
+          # One atomic push: either all ref updates and deletions land, or none do.
+          git push --atomic "$REMOTE" \
+            "${heads_force}refs/heads/*:refs/heads/*" \
+            "${tags_force}refs/tags/*:refs/tags/*" \
+            "${del[@]}"
       #
       # Step 6: Update README.md on sync/svn-to-git with latest mirror state
       #
