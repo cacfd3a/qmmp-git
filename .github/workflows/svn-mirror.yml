@@ -334,8 +334,10 @@ jobs:
                     *..*|/*) warn "suspicious path, skipping: $local_path"; continue ;;
                   esac
                   if [ "$pass" == "D" ]; then
-                    [ "$action" == "D" ] || continue
-                    git rm -rf --ignore-unmatch "$local_path"
+                    # D = delete; R = replace (delete + add of the same path in one revision)
+                    [[ "$action" == [DR] ]] || continue
+                    git rm -rf -q --ignore-unmatch -- "$local_path"
+                    rm -rf -- "$local_path"
                   else
                     [ "$action" != "D" ] || continue
                     if [[ "$git_branch" == "master" ]]; then
