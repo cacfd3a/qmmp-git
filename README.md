@@ -18,8 +18,8 @@ This repository is an archive which tracks the [Qmmp source code](https://source
 | Field&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Value |
 |:---|:---|
 | Latest SVN revision | [`r13337`](https://github.com/cacfd3a/qmmp-git/commit/cbb6ac2fbce9f6618c6e46583a8f671f1196b408) |
-| Last changed | 2026-11-21 20:34:21 UTC |
-| Branches | [54](https://github.com/cacfd3a/qmmp-git/branches) |
+| Last changed | 2026-11-27 13:24:48 UTC |
+| Branches | [51](https://github.com/cacfd3a/qmmp-git/branches) |
 | Tags (3) | [`qmmp-2.4.3`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.3) [`qmmp-2.4.2`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.2) [`qmmp-2.4.1`](https://github.com/cacfd3a/qmmp-git/releases/tag/qmmp-2.4.1) |
 #### Recent commits (last 10)
 
@@ -28,13 +28,13 @@ This repository is an archive which tracks the [Qmmp source code](https://source
 | → | [`qmmp-2.4`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-2.4)/[`r13337`](https://github.com/cacfd3a/qmmp-git/commit/cbb6ac2fbce9f6618c6e46583a8f671f1196b408) | 2026-11-21 09:56 | updated changelogs |
 | | [`qmmp-1.7`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-1.7)/[`r13336`](https://github.com/cacfd3a/qmmp-git/commit/0594f76d5242470c5a4b2ba806b3eaa52aca5b8e) | 2026-11-21 09:46 | updated changelogs |
 | | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13335`](https://github.com/cacfd3a/qmmp-git/commit/8a65a6981eaa230db9189c0dd9416f88987d316e) | 2026-11-04 17:31 | history: feature to select multiple records |
-| | [`feature/media-library`](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library)/[`r13335`](https://github.com/cacfd3a/qmmp-git/commit/c75d681ef4787be35e44b831ba1920dd408987b1) | 2026-11-04 17:31 | history: feature to select multiple records |
 | | [`qmmp-0.12`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-0.12)/[`r13334`](https://github.com/cacfd3a/qmmp-git/commit/204a8bf2ebdb26a0619eca633dfc44ff5f6ed29c) | 2026-11-04 13:44 | version bump |
 | | [`qmmp-0.12`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-0.12)/[`r13333`](https://github.com/cacfd3a/qmmp-git/commit/a08e46b46a88add91c2a8838de396571f4d6257e) | 2026-11-04 13:25 | gme: fixed fade out setting (#1245) |
 | | [`qmmp-1.7`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-1.7)/[`r13332`](https://github.com/cacfd3a/qmmp-git/commit/d17bd85030230d20174a3de2e67ead0a8f2740cb) | 2026-11-04 13:21 | gme: fixed fade out setting (#1245) |
 | | [`qmmp-2.4`](https://github.com/cacfd3a/qmmp-git/tree/qmmp-2.4)/[`r13331`](https://github.com/cacfd3a/qmmp-git/commit/b465c2a6b1d0dd6096a2758963e9353a3e7d983a) | 2026-11-04 13:19 | gme: fixed fade out setting (#1245) |
 | | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13330`](https://github.com/cacfd3a/qmmp-git/commit/3a71fcf036b4a902bb972203b4d0003733057755) | 2026-11-04 13:18 | gme: optimization |
-| | [`feature/media-library`](https://github.com/cacfd3a/qmmp-git/tree/feature/media-library)/[`r13330`](https://github.com/cacfd3a/qmmp-git/commit/9b435b224e4e054c59690996ee1dd77e214d3f4b) | 2026-11-04 13:18 | gme: optimization |
+| | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13329`](https://github.com/cacfd3a/qmmp-git/commit/97b49b0077e1b5e2b351e1a0ef2b0f97fbeca288) | 2026-11-04 13:11 | optimization |
+| | **[`master`](https://github.com/cacfd3a/qmmp-git/tree/master)**/[`r13328`](https://github.com/cacfd3a/qmmp-git/commit/cfc9642f037e5239a8750222fa8f0f3b36303d15) | 2026-11-04 13:09 | gme: fixed fade out setting (#1245) |
 ## Description
 Qmmp is an audio-player, written with the help of the Qt library. The user interface is similar to [Winamp](https://nl.wikipedia.org/wiki/Winamp) or [XMMS](https://nl.wikipedia.org/wiki/XMMS). Alternative user interfaces are available, for example by downloading `.wsz` files from the [Webamp Skin Museum](https://skins.webamp.org/).
 
