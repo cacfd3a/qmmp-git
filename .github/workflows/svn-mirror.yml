@@ -116,8 +116,8 @@ jobs:
           #   git-svn-id: svn://svn.code.sf.net/p/qmmp-dev/code/@1234
           # Appends are tip-only and in ascending revision order, so each branch tip carries that branch's highest revision. Checking tips only is O(branches); the old full-history walk (with ~3 process spawns per commit) cost ~10 min on every run. Assumes mirror branches are only ever written by this workflow.
           LAST_REV=0
-          for ref in $(git for-each-ref --format='%(refname:short)' refs/heads | grep -Ev "^(${NON_SVN_BRANCHES})/" || true); do
-            tip_rev=$(git log -1 --format=%B "$ref" 2>/dev/null | grep -oP 'git-svn-id:.*@\K[0-9]+' | tail -1 || true)
+          for ref in $(git for-each-ref --format='%(refname:lstrip=2)' refs/heads | grep -Ev "^(${NON_SVN_BRANCHES})/" || true); do
+            tip_rev=$(git log -1 --format=%B "refs/heads/$ref" 2>/dev/null | grep -oP 'git-svn-id:.*@\K[0-9]+' | tail -1 || true)
             if [ -n "$tip_rev" ] && [ "$tip_rev" -gt "$LAST_REV" ]; then
               LAST_REV=$tip_rev
             fi
@@ -293,9 +293,9 @@ jobs:
                 fi
 
                 if [ "$action" == "A" ] && [ -n "$copyfrom" ] && [ -z "$local_path" ]; then
-                  src_ref="master"
+                  src_ref="refs/heads/master"
                   if [[ "$copyfrom" == "/branches/"* ]]; then
-                    tmp=${copyfrom#/branches/}; src_ref=${tmp%%/*}
+                    tmp=${copyfrom#/branches/}; src_ref="refs/heads/${tmp%%/*}"
                   fi
 
                   # Create branches at the snapshot commit (last commit on src_ref at or before cf_rev), falling back to src_ref tip.
@@ -303,7 +303,7 @@ jobs:
                   if [ -n "$cf_rev" ]; then
                     src_commit=$(snapshot_sha "$src_ref" "$cf_rev")
                   fi
-                  if ! git rev-parse --verify --quiet "$git_branch" >/dev/null; then
+                  if ! git rev-parse --verify --quiet "refs/heads/$git_branch" >/dev/null; then
                     if [ -n "$src_commit" ]; then
                       git branch "$git_branch" "$src_commit"
                       echo "branches/$git_branch (from $copyfrom@r$cf_rev)" >> "$CREATED_REFS"
@@ -321,13 +321,15 @@ jobs:
                 fi
               done <<< "${branch_changes[$git_branch]}"
 
-              if ! git rev-parse --verify --quiet "$git_branch" >/dev/null; then
+              if ! git rev-parse --verify --quiet "refs/heads/$git_branch" >/dev/null; then
                 echo "  Branch $git_branch does not exist, skipping."
                 continue
               fi
 
               #  Apply file-level changes to the branch 
-              git checkout -f "$git_branch"
+              # 'switch' only accepts branch names, so a same-named tag can't be picked
+              # Don't use git checkout -f "refs/heads/$git_branch" here, because it detaches HEAD.
+              git switch -f "$git_branch"
 
               # Two passes: deletions first, then adds/modifications. A "replace" (R, or D+A of one path in one revision) must remove the old entry before new content is fetched; svn lists paths alphabetically, so the A/R line can precede the D line and in-order replay would export onto a file the D should have removed (the r13284 failure).
               for pass in D X; do
@@ -408,11 +410,12 @@ jobs:
               while IFS= read -r change; do
                 IFS=$'\x1f' read -r action local_path copyfrom cf_rev <<< "$change"
                 if [ "$action" == "A" ] && [ -n "$copyfrom" ] && [ -z "$local_path" ]; then
-                  src_ref="master"
+                  src_ref="refs/heads/master"
                   src_tag=""
                   if [[ "$copyfrom" == "/branches/"* ]]; then
-                    tmp=${copyfrom#/branches/}; src_ref=${tmp%%/*}
+                    tmp=${copyfrom#/branches/}; src_ref="refs/heads/${tmp%%/*}"
                   elif [[ "$copyfrom" == "/tags/"* ]]; then
+                    # /tags/ branch already sets src_ref="refs/tags/$src_tag"
                     tmp=${copyfrom#/tags/}; src_tag=${tmp%%/*}
                     src_ref="refs/tags/$src_tag"
                   fi
@@ -552,7 +555,7 @@ jobs:
             exit 0
           fi
 
-          git checkout -f "$README_BRANCH"
+          git switch -f "$README_BRANCH"
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
 
           # Tweakables
@@ -576,7 +579,8 @@ jobs:
           }
 
           # Branches (excluding sync/svn-to-git) feed both the summary table and the recent-commits list
-          BRANCH_LIST=$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | grep -Ev "^(${NON_SVN_BRANCHES})/" | sort || true)
+          BRANCH_LIST=$(git for-each-ref --format='%(refname:lstrip=2)' refs/heads 2>/dev/null | grep -vxF -e 'svn-sync-entrypoint' -e "$README_BRANCH" | grep -Ev "^(${NON_SVN_BRANCHES})/" | sort || true)
+          
           #  Recent commits: last N mirrored commits across all branches, newest first 
           # Take the N most recent git-svn commits per branch, merge, and keep the global top N by revision. Exact despite the per-branch cutoff: any commit in the global top N is necessarily within its own branch's top N. Dedup by SHA: one commit reachable from several branches would otherwise occupy several rows; prio makes master win ties.
           # Records are TAB-separated:
@@ -592,7 +596,7 @@ jobs:
               [ -z "$rev" ] && continue                 # belt & braces: --grep already filtered to mirrored commits
               printf -v row '%s\t%s\t%s\t%s\t%s\t%s' "$rev" "$prio" "$sha" "$rev_date" "$ref" "$subject"
               RECENTS_RAW+="${row}"$'\n'
-            done < <(git log "$ref" -n "$RECENT_COUNT" --extended-regexp --grep='git-svn-id:' \
+            done < <(git log "refs/heads/$ref" -n "$RECENT_COUNT" --extended-regexp --grep='git-svn-id:' \
                        --date=format:'%Y-%m-%d %H:%M' \
                        --format='%H%x00%ad%x00%s%x00%B%x00' 2>/dev/null)
           done < <(printf '%s\n' "$BRANCH_LIST")
