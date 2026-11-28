@@ -87,6 +87,9 @@ jobs:
           set -euo pipefail
           cd mirror
 
+          # Treat every path handed to git as a literal path, never a glob or ':(magic)' pathspec
+          export GIT_LITERAL_PATHSPECS=1
+
           # State files in /tmp (persists across steps in this job):
           #   mirror_changed: touched when this run mutated any ref; steps 5 & 6 bail out early when it's absent.
           #   created_refs / deleted_refs: feeds the run summary and the push step.
@@ -173,10 +176,17 @@ jobs:
             [ -z "$block" ] && continue
 
             #  Parse the header line: "r123 | author | date | n lines" 
-            rev=$(printf '%s\n' "$block" | head -n1 | awk '{print $1}' | tr -d 'r')
-            author=$(printf '%s\n' "$block" | head -n1 | awk -F'|' '{print $2}' | sed 's/^ *//;s/ *$//')
-            git_date=$(printf '%s\n' "$block" | head -n1 | awk -F'|' '{print $3}' | awk '{print $1"T"$2" "$3}')
-
+            # Pure bash parameter expansion: no pipes, so a block larger than the pipe buffer (64 KB) can't SIGPIPE a writer under pipefail, and there are no forks per revision.
+            header=${block%%$'\n'*}
+            rev=${header%% *}; rev=${rev#r}
+            IFS='|' read -r _ author date_raw _ <<< "$header"
+            # '|' is not whitespace, so read doesn't trim: strip surrounding spaces by hand
+            author=${author#"${author%%[![:space:]]*}"}
+            author=${author%"${author##*[![:space:]]}"}
+            # " 2024-01-01 12:00:00 +0100 (Mon, 01 Jan 2024) " -> "2024-01-01T12:00:00 +0100"
+            read -r d_part t_part z_part _ <<< "$date_raw"
+            git_date="${d_part}T${t_part} ${z_part}"
+            
             #  Parse the "Changed paths" section 
             # Extract lines matching "   M /path" (3 spaces, action, space, path)
             mapfile -t path_lines < <(printf '%s\n' "$block" | sed -n '/Changed paths:/,/^$/p' | grep -E '^   [A-Z]')
@@ -352,28 +362,30 @@ jobs:
                       svn_target="$SVN_URL/branches/$git_branch/$local_path"
                     fi
 
-                    mkdir -p "$(dirname "$local_path")"
+                    mkdir -p -- "$(dirname -- "$local_path")"
 
                     # `svn cat` doubles as the file-vs-directory probe: success means the path is a file. It writes to a temp name so a local directory at $local_path can't abort the probe via redirection and get misrouted into the export branch.
                     if svn --non-interactive cat -r "$rev" "$svn_target@$rev" > "$local_path.mirror-tmp" 2>/dev/null; then
                       # File: if our tree still has a directory at the path (SVN replaced a dir with a file), clear it first.
                       if [ -d "$local_path" ]; then
-                        git rm -rf -q --ignore-unmatch "$local_path" >/dev/null 2>&1 || true
-                        rm -rf "$local_path"
+                        git rm -rf -q --ignore-unmatch -- "$local_path" >/dev/null 2>&1 || true
+                        rm -rf -- "$local_path"
                       fi
-                      mv -f "$local_path.mirror-tmp" "$local_path"
-                      git add -A "$local_path"
+                      mv -f -- "$local_path.mirror-tmp" "$local_path"
+                      # -f: mirror SVN exactly, even if a .gitignore (repo or global) would skip the path
+                      git add -f -A -- "$local_path"
                     else
-                      rm -f "$local_path.mirror-tmp"
+                      rm -f -- "$local_path.mirror-tmp"
                       # Directory: if our tree still has a plain file at the path (SVN replaced a file with a dir; the r13284 case), export fails locally with E155007; clear it.
                       if [ -e "$local_path" ] && [ ! -d "$local_path" ]; then
-                        git rm -rf -q --ignore-unmatch "$local_path" >/dev/null 2>&1 || true
-                        rm -f "$local_path"
+                        git rm -rf -q --ignore-unmatch -- "$local_path" >/dev/null 2>&1 || true
+                        rm -f -- "$local_path"
                       fi
                       # A failed export here is fatal: the log claims this path exists at r$rev, so a miss means log/repo disagreement or a transient error. Abort cleanly. Nothing has been pushed, the next run simply retries.
                       svn --non-interactive export -r "$rev" --force "$svn_target@$rev" "$local_path" \
                         || { echo "  ERROR: r$rev: fetch failed for $svn_target@$rev (branch $git_branch): aborting, nothing was pushed; safe to re-run"; exit 1; }
-                      git add -A "$local_path"
+                      # -f: same as above
+                      git add -f -A -- "$local_path"
                     fi
                   fi
                 done <<< "${branch_changes[$git_branch]}"
